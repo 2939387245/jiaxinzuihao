@@ -21,7 +21,7 @@ function normalizeOrigin(value) {
 }
 
 export const apiOriginStore = {
-  get: () => normalizeOrigin(localStorage.getItem(API_ORIGIN_KEY) || DEFAULT_API_ORIGIN),
+  get: () => normalizeOrigin(API_SETTINGS_ENABLED ? (localStorage.getItem(API_ORIGIN_KEY) || DEFAULT_API_ORIGIN) : DEFAULT_API_ORIGIN),
   set: (value) => {
     const normalized = normalizeOrigin(value);
     if (!normalized) throw new Error("请填写服务器地址");

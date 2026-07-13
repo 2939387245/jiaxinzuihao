@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0dcff"/>
+      <stop offset="0.48" stop-color="#f8ddea"/>
+      <stop offset="1" stop-color="#fff7fb"/>
+    </linearGradient>
+    <linearGradient id="heart" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9149bd"/>
+      <stop offset="1" stop-color="#e15f96"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="30" stdDeviation="34" flood-color="#7d3e8c" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#background)"/>
+  <circle cx="512" cy="490" r="315" fill="#ffffff" fill-opacity="0.72"/>
+  <path filter="url(#shadow)" fill="url(#heart)" d="M512 785C445 716 275 597 275 433c0-111 80-188 181-188 58 0 105 29 136 76 31-47 78-76 136-76 101 0 181 77 181 188 0 164-170 283-237 352l-80 82-80-82Z" transform="translate(-80 -24) scale(1.155)"/>
+  <path fill="#fff" fill-opacity="0.96" d="M477 385h70v225h118v63H477V385Z"/>
+  <circle cx="794" cy="243" r="34" fill="#fff" fill-opacity="0.8"/>
+  <circle cx="234" cy="782" r="24" fill="#fff" fill-opacity="0.68"/>
+</svg>

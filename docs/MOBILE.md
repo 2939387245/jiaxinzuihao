@@ -1,99 +1,82 @@
-# Android 与 iPhone 版本方案
+# Android 与 iPhone 客户端
 
-## 推荐路线
-
-使用 Expo + React Native 做一个 `apps/mobile`，Android 和 iPhone 共用约 90% 的业务代码；不要复制后端。网页、Android、iPhone 都访问同一个线上 API，这就是三端数据同步的核心。
+Lumi 现在使用 Capacitor 把现有 React/Vite 前端打包为原生应用。网页、Android 和后续 iPhone 客户端共用同一套界面与同一个后端，因此功能和数据保持一致，不需要维护三套业务代码。
 
 ```text
 Web ─────────┐
-Android ─────┼─ HTTPS / Socket.IO ── Lumi API ── SQLite + 照片存储
+Android ─────┼─ HTTPS / Socket.IO ── Lumi API ── SQLite + uploads
 iPhone ──────┘
 ```
 
-服务端已经提供统一能力：
+安装包不硬编码后端域名。首次打开 Android App 时，在登录页展开“服务器设置”，填写 Cloudflare Tunnel 提供的完整 HTTPS 地址并保存。该地址只保存在当前手机中。
 
-- `POST /api/auth/login`、`POST /api/auth/register`（注册必须使用首个账号提供的一次性邀请码）
-- `GET /api/me`、`GET /api/dashboard`
-- `/api/moments`、`/api/anniversaries`、`/api/todos`、`/api/messages`
-- Socket.IO 事件：`space:updated`、`message:new`
+## Android 环境
 
-## 创建移动项目
-
-在仓库根目录运行：
-
-```powershell
-npx create-expo-app@latest apps/mobile
-Set-Location '.\apps\mobile'
-npx expo install expo-router expo-secure-store expo-image-picker expo-notifications
-npm install socket.io-client
-npm install --global eas-cli
-eas login
-eas build:configure
-```
-
-建议目录：
+本机默认使用：
 
 ```text
-apps/mobile/
-├─ app/
-│  ├─ (auth)/login.tsx
-│  ├─ (tabs)/index.tsx
-│  ├─ (tabs)/gallery.tsx
-│  ├─ (tabs)/todos.tsx
-│  ├─ anniversaries.tsx
-│  └─ chat.tsx
-├─ src/api/client.ts
-├─ src/api/socket.ts
-├─ src/store/auth.ts
-└─ app.json
+Android SDK: E:\Android_sdk\sdk
+JDK:         Java 21
+应用包名:    xin.jiaxinzuihao.lumi
+最低系统:    Android 7.0（API 24）
+目标系统:    Android 16（API 36）
 ```
 
-移动端使用 `EXPO_PUBLIC_API_URL=https://你的-api-域名`。登录得到的 JWT 不放普通本地存储，使用 `expo-secure-store`；照片通过 `expo-image-picker` 选取，再以 `multipart/form-data` 发送到 `/api/moments`。
+## 构建 Android APK
 
-## 同步规则
-
-1. App 启动时用安全存储中的 JWT 请求 `/api/me`。
-2. 所有读写都带 `Authorization: Bearer <token>`。
-3. Socket.IO 连接时传 `auth: { token }`。
-4. 收到 `space:updated` 后刷新对应列表；收到 `message:new` 时直接追加消息。
-5. 弱网时先禁用重复提交；第二阶段再增加离线队列和冲突时间戳。
-
-这样不需要“手机和网页互相传数据”：它们只是同一个空间的三个客户端，数据真相始终在服务端。
-
-## 打包 Android
-
-内部体验包：
+在仓库根目录使用 PowerShell 7：
 
 ```powershell
-eas build --platform android --profile preview
+.\build-android.ps1
 ```
 
-正式商店包：
+脚本会自动完成网页构建、Capacitor 同步和 Gradle 编译，输出文件为：
+
+```text
+artifacts\Lumi-android-debug.apk
+```
+
+连接已开启 USB 调试的 Android 手机后，也可以构建并安装：
 
 ```powershell
-eas build --platform android
-eas submit --platform android
+.\build-android.ps1 -Install
 ```
 
-EAS 可以在云端生成 Android 安装包并管理签名；内部包可以先只发给你们两个人安装。
+脚本默认让 ADB 使用 `5038` 端口，避免与这台电脑上正在运行的代理程序占用的 `5037` 端口冲突。
 
-## 打包 iPhone
+当前 APK 使用 Android 调试证书签名，适合你们两个人内部安装。发布到应用商店前，需要另外创建并安全保管正式签名密钥，再生成 release APK 或 AAB。
 
-Windows 不能本地运行 Xcode/iOS Simulator，但可以用 EAS 云构建：
+## 修改前端后的重新打包
+
+平时只需要继续修改 `apps/web`。完成修改后再次运行：
 
 ```powershell
-eas build --platform ios
-eas submit --platform ios
+.\build-android.ps1
 ```
 
-真机内测推荐 TestFlight。发布到 App Store 或给真机签名安装需要 Apple Developer 账号；EAS 可以协助管理证书和描述文件。
+如果需要在 Android Studio 中调试原生工程：
 
-## 最省事的过渡方案
+```powershell
+npm run android:sync -w web
+npm run android:open -w web
+```
 
-在原生 App 开发完成前，直接把已部署网页在手机浏览器打开并“添加到主屏幕”。当前 Web 已针对 390×844 做响应式适配，两个人可以先用起来，再决定是否值得上架应用商店。
+## 数据同步
+
+1. 所有客户端都连接同一个 HTTPS 后端。
+2. 登录后，每次 API 请求都携带当前账号的 JWT。
+3. 照片、时光、纪念日、清单和聊天数据仍写入运行后端的电脑。
+4. Socket.IO 负责通知另一端刷新内容与接收新消息。
+5. 更换后端地址时，只需在各手机的登录页重新保存服务器地址。
+
+Android App 本身不保存服务端数据库；它只保存登录令牌、服务器地址和少量浏览器缓存。删除 App 数据或卸载 App 不会删除电脑上的情侣空间数据。
+
+## 后续 iPhone 版本
+
+同一套 Capacitor 前端可以继续生成 iOS 工程，但 Apple 的最终编译和签名必须在 macOS + Xcode 上完成。届时可以使用 Mac 本地构建，或使用提供 macOS 构建机的 CI 服务；真机长期安装和 TestFlight 分发需要 Apple Developer 账号。
 
 官方参考：
 
-- [Expo EAS Build](https://docs.expo.dev/build/)
-- [创建第一个 EAS 构建](https://docs.expo.dev/build/setup/)
-- [EAS 分发与提交](https://docs.expo.dev/distribution/introduction/)
+- [Capacitor Android 文档](https://capacitorjs.com/docs/android)
+- [Capacitor iOS 文档](https://capacitorjs.com/docs/ios)
+- [Android 命令行工具文档](https://developer.android.com/tools)

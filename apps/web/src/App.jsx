@@ -30,7 +30,7 @@ import {
 } from "@phosphor-icons/react";
 import "@fontsource-variable/manrope";
 import "@fontsource-variable/noto-sans-sc";
-import { api, authStore, connectRealtime, imageUrl } from "./api";
+import { API_SETTINGS_ENABLED, api, apiOriginStore, authStore, connectRealtime, imageUrl } from "./api";
 
 const navItems = [
   { id: "home", label: "首页", icon: House },
@@ -201,6 +201,10 @@ function AuthScreen({ onAuth }) {
   const [form, setForm] = useState({ name: "", email: "", password: "", inviteCode: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [serverOpen, setServerOpen] = useState(() => API_SETTINGS_ENABLED && !apiOriginStore.get());
+  const [serverAddress, setServerAddress] = useState(() => apiOriginStore.get());
+  const [serverBusy, setServerBusy] = useState(false);
+  const [serverStatus, setServerStatus] = useState("");
   const update = (event) => setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
   const submit = async (event) => {
     event.preventDefault(); setBusy(true); setError("");
@@ -208,6 +212,17 @@ function AuthScreen({ onAuth }) {
       const payload = await api(mode === "login" ? "/api/auth/login" : "/api/auth/register", { method: "POST", body: JSON.stringify(form) });
       onAuth(payload);
     } catch (requestError) { setError(requestError.message); } finally { setBusy(false); }
+  };
+  const saveServer = async (event) => {
+    event.preventDefault(); setServerBusy(true); setServerStatus("");
+    try {
+      const normalized = apiOriginStore.set(serverAddress);
+      setServerAddress(normalized);
+      const health = await api("/health");
+      if (!health.ok) throw new Error("服务器健康检查没有通过");
+      setServerStatus("连接成功，可以登录了");
+      setServerOpen(false);
+    } catch (requestError) { setServerStatus(requestError.message); } finally { setServerBusy(false); }
   };
   return (
     <div className="auth-page">
@@ -239,6 +254,15 @@ function AuthScreen({ onAuth }) {
             <button className="primary-button full" disabled={busy}>{busy ? "正在打开…" : mode === "login" ? "进入双人空间" : "加入双人空间"}<ArrowRight weight="bold" /></button>
           </form>
           <small className="privacy-note"><LockKey /> 你的记录只通过自己的服务端保存，不会公开展示。</small>
+          {API_SETTINGS_ENABLED && <div className="native-server-wrap">
+            <button type="button" className="server-toggle" onClick={() => setServerOpen((current) => !current)}><GearSix />服务器设置</button>
+            {serverOpen && <form className="server-settings" onSubmit={saveServer}>
+              <Field label="后端服务器地址"><input type="url" value={serverAddress} onChange={(event) => setServerAddress(event.target.value)} placeholder="https://你的后端地址" autoCapitalize="none" autoCorrect="off" required /></Field>
+              <p>地址只保存在这台手机。正式使用请填写 HTTPS 地址。</p>
+              {serverStatus && <div className={serverStatus.startsWith("连接成功") ? "form-success" : "form-error"}>{serverStatus}</div>}
+              <button className="quiet-button full" disabled={serverBusy}>{serverBusy ? "正在检测…" : "保存并检测连接"}</button>
+            </form>}
+          </div>}
         </div>
       </section>
     </div>

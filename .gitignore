@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.local
+.runtime/
+.vercel/
+docs/DEPLOYMENT.md
+apps/api/data/
+apps/api/uploads/
+deploy/cloudflared/config.yml
+qa/
+*.log
+.DS_Store

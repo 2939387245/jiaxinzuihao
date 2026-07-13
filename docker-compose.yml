@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      PORT: 8787
+      CLIENT_ORIGIN: http://localhost:8080
+      JWT_SECRET: ${JWT_SECRET:?请先在项目根目录的 .env 中设置至少 32 字节的随机 JWT_SECRET}
+      DATA_DIR: /app/storage/data
+      UPLOAD_DIR: /app/storage/uploads
+      TRUST_PROXY: 1
+      MEDIA_URL_TTL_SECONDS: 900
+    volumes:
+      - lumi-storage:/app/storage
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        VITE_API_URL: http://localhost:8787
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  lumi-storage:

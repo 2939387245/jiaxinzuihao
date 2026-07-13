@@ -1,0 +1,22 @@
+{
+  "name": "@lumi/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "account:bootstrap": "node scripts/bootstrap-owner.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "latest",
+    "bcryptjs": "latest",
+    "cors": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "jsonwebtoken": "latest",
+    "multer": "latest",
+    "socket.io": "latest",
+    "zod": "latest"
+  }
+}

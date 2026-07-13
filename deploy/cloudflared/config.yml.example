@@ -1,0 +1,9 @@
+# 复制到 E:\Cloudflared\config\config.yml，并替换下面两个 <TUNNEL_ID>。
+# 凭据 JSON 由 `cloudflared tunnel create jiaxinzuihao-api` 生成，不能提交到 Git。
+tunnel: <TUNNEL_ID>
+credentials-file: C:\Users\zzhnnn\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  - hostname: api.example.com
+    service: http://127.0.0.1:8787
+  - service: http_status:404

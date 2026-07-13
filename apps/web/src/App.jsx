@@ -20,6 +20,7 @@ import {
   MapPin,
   PencilSimple,
   PaperPlaneTilt,
+  Play,
   Plus,
   SignOut,
   Sparkle,
@@ -346,7 +347,7 @@ function HomeView({ data, setModal }) {
           <button className="primary-button" onClick={() => setModal("moment")}><Plus weight="bold" />记录此刻</button>
         </div>
         <div className="cover-card">
-          {coverMoment ? <img src={imageUrl(coverMoment.image_url)} alt={coverMoment.title} /> : <div className="cover-empty"><ImageSquare /><b>还没有共同照片</b><span>上传的第一张照片会出现在这里</span></div>}
+          {coverMoment ? <><img src={imageUrl(coverMoment.image_url)} alt={coverMoment.title} />{coverMoment.video_url && <MotionBadge />}</> : <div className="cover-empty"><ImageSquare /><b>还没有共同照片</b><span>上传的第一张照片会出现在这里</span></div>}
           <div className="cover-vignette" />
           <div className="cover-meta"><span>{coverMoment ? "最近收藏" : "OUR FIRST PHOTO"}</span><h3>{coverMoment?.title || latest?.title || "等一张属于你们的照片"}</h3><p><MapPin />我们的共同相册</p></div>
           <button className="cover-action" onClick={() => setModal("moment")}><Camera />添加新照片</button>
@@ -383,7 +384,7 @@ function TimelineView({ data, setModal, reload }) {
       <div className="timeline-list">{data.moments.map((moment) => <article className="timeline-item" key={moment.id}>
         <div className="timeline-date"><strong>{new Date(`${moment.happened_at}T12:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("zh-CN", { month: "short" }).format(new Date(`${moment.happened_at}T12:00:00`))}</span></div>
         <div className="timeline-line"><span /></div>
-        {moment.image_url ? <button className="memory-image-button" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={`放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} /><span><ArrowsOutSimple />查看大图</span></button> : <div className="memory-no-photo"><ImageSquare /><span>这条记录没有照片</span></div>}
+        {moment.image_url ? <button className="memory-image-button" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}<span className="image-hover-action">{moment.video_url ? <><Play weight="fill" />播放动态照片</> : <><ArrowsOutSimple />查看大图</>}</span></button> : <div className="memory-no-photo"><ImageSquare /><span>这条记录没有照片</span></div>}
         <div className="timeline-copy"><span>{moment.author_name} 添加</span><h3>{moment.title}</h3><p>{moment.note || "这一刻，被我们一起记住了。"}</p><small>{toDateText(moment.happened_at)}</small><div className="item-actions"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button className="danger" onClick={() => remove(moment)}><Trash />删除</button></div></div>
       </article>)}</div>
     </section>
@@ -406,7 +407,7 @@ function GalleryView({ data, setModal, reload }) {
       <div className="filter-tabs">{["全部", "今年"].map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item} <small>{item === "全部" ? photos.length : thisYearPhotos.length}</small></button>)}</div>
       {!visiblePhotos.length && <EmptyState icon={ImageSquare} title="这里还没有照片" description="不上传照片的时光只会留在时光页，不会用示例图填充相册。" />}
       <div className="gallery-grid">{visiblePhotos.map((moment, index) => <article className={`gallery-card card-${index % 3}`} key={moment.id}>
-        <button className="gallery-zoom" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={`放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} /></button>
+        <button className="gallery-zoom" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}</button>
         <div className="gallery-overlay"><span><CalendarBlank />{moment.happened_at}</span><h3>{moment.title}</h3><p>{moment.note}</p><div className="item-actions light"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button onClick={() => remove(moment)}><Trash />删除</button></div></div>
       </article>)}</div>
     </section>
@@ -493,7 +494,7 @@ function MomentModal({ item, onClose, onSaved }) {
   const [error, setError] = useState("");
   const editing = Boolean(item);
   const submit = async (event) => { event.preventDefault(); setBusy(true); setError(""); try { const form = new FormData(event.currentTarget); form.set("removeImage", String(form.get("removeImage") === "on")); await api(editing ? `/api/moments/${item.id}` : "/api/moments", { method: editing ? "PATCH" : "POST", body: form }); onSaved(); } catch (requestError) { setError(requestError.message); } finally { setBusy(false); } };
-  return <Modal title={editing ? "编辑这段时光" : "记录此刻"} eyebrow={editing ? "EDIT MEMORY" : "A NEW MEMORY"} onClose={onClose}><form className="modal-form" onSubmit={submit}><Field label="这一刻的名字"><input name="title" defaultValue={item?.title || ""} placeholder="比如：下班后的晚风" required /></Field><Field label="发生日期"><input name="happenedAt" type="date" defaultValue={item?.happened_at || new Date().toISOString().slice(0, 10)} required /></Field><Field label="想留下的话"><textarea name="note" defaultValue={item?.note || ""} placeholder="写一点只有你们懂的细节…" /></Field>{item?.image_url && <div className="current-photo"><img src={imageUrl(item.image_url)} alt={item.title} /><label><input name="removeImage" type="checkbox" />保存时移除这张照片</label></div>}<label className="upload-field"><Camera /><span><b>{item?.image_url ? "替换照片（可选）" : "选择一张照片（可选）"}</b><small>不选择就不会自动添加图片；JPG、PNG、WebP，最大 8MB</small></span><input name="image" type="file" accept="image/*" /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button full" disabled={busy}>{busy ? "正在保存…" : editing ? "保存修改" : "收藏进我们的时光"}</button></form></Modal>;
+  return <Modal title={editing ? "编辑这段时光" : "记录此刻"} eyebrow={editing ? "EDIT MEMORY" : "A NEW MEMORY"} onClose={onClose}><form className="modal-form" onSubmit={submit}><Field label="这一刻的名字"><input name="title" defaultValue={item?.title || ""} placeholder="比如：下班后的晚风" required /></Field><Field label="发生日期"><input name="happenedAt" type="date" defaultValue={item?.happened_at || new Date().toISOString().slice(0, 10)} required /></Field><Field label="想留下的话"><textarea name="note" defaultValue={item?.note || ""} placeholder="写一点只有你们懂的细节…" /></Field>{item?.image_url && <div className="current-photo"><img src={imageUrl(item.image_url)} alt={item.title} /><label>{item?.video_url && <b className="current-motion"><Play weight="fill" />动态照片</b>}<span><input name="removeImage" type="checkbox" />保存时移除这张照片</span></label></div>}<label className="upload-field"><Camera /><span><b>{item?.image_url ? "替换照片（可选）" : "选择一张照片（可选）"}</b><small>支持 JPG（含动态照片）、PNG、WebP，最大 8MB</small></span><input name="image" type="file" accept="image/*" /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button full" disabled={busy}>{busy ? "正在保存…" : editing ? "保存修改" : "收藏进我们的时光"}</button></form></Modal>;
 }
 
 function AnniversaryModal({ item, onClose, onSaved }) {
@@ -552,8 +553,10 @@ function DeleteSpaceModal({ onClose, onDeleted }) {
 
 function Lightbox({ item, onClose }) {
   if (!item?.image_url) return null;
-  return <div className="lightbox" role="dialog" aria-modal="true" aria-label={item.title} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><button className="lightbox-close" onClick={onClose} aria-label="关闭大图"><X /></button><figure><img src={imageUrl(item.image_url)} alt={item.title} /><figcaption><b>{item.title}</b><span>{toDateText(item.happened_at)}</span>{item.note && <p>{item.note}</p>}</figcaption></figure></div>;
+  return <div className="lightbox" role="dialog" aria-modal="true" aria-label={item.title} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><button className="lightbox-close" onClick={onClose} aria-label="关闭大图"><X /></button><figure className={item.video_url ? "motion-figure" : ""}>{item.video_url ? <video src={imageUrl(item.video_url)} poster={imageUrl(item.image_url)} controls autoPlay muted loop playsInline preload="metadata" /> : <img src={imageUrl(item.image_url)} alt={item.title} />}<figcaption><b>{item.title}</b><span>{item.video_url ? "动态照片 · 可在播放器中开启声音" : toDateText(item.happened_at)}</span>{item.video_url && <span>{toDateText(item.happened_at)}</span>}{item.note && <p>{item.note}</p>}</figcaption></figure></div>;
 }
+
+function MotionBadge() { return <span className="motion-badge"><Play weight="fill" />动态</span>; }
 
 function EmptyState({ icon: Icon, title, description }) { return <div className="empty-state"><Icon /><h3>{title}</h3><p>{description}</p></div>; }
 

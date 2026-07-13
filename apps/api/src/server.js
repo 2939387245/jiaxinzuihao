@@ -11,11 +11,13 @@ import jwt from "jsonwebtoken";
 import multer from "multer";
 import { Server } from "socket.io";
 import { z } from "zod";
+import { prepareMomentMedia } from "./motion-photo.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const DEFAULT_JWT_SECRET = "local-only-change-before-deploy";
 const JWT_SECRET = process.env.JWT_SECRET || DEFAULT_JWT_SECRET;
 const MEDIA_URL_TTL_SECONDS = Number(process.env.MEDIA_URL_TTL_SECONDS || 900);
+const FFMPEG_PATH = process.env.FFMPEG_PATH || "ffmpeg";
 if (process.env.NODE_ENV === "production" && (JWT_SECRET === DEFAULT_JWT_SECRET || Buffer.byteLength(JWT_SECRET) < 32)) {
   throw new Error("生产环境必须设置至少 32 字节的 JWT_SECRET");
 }
@@ -55,6 +57,7 @@ db.exec(`
     title TEXT NOT NULL,
     note TEXT NOT NULL DEFAULT '',
     image_url TEXT NOT NULL DEFAULT '',
+    video_url TEXT NOT NULL DEFAULT '',
     happened_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
@@ -98,6 +101,10 @@ const userColumns = db.pragma("table_info(users)");
 if (!userColumns.some((column) => column.name === "token_version")) {
   db.exec("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
 }
+const momentColumns = db.pragma("table_info(moments)");
+if (!momentColumns.some((column) => column.name === "video_url")) {
+  db.exec("ALTER TABLE moments ADD COLUMN video_url TEXT NOT NULL DEFAULT ''");
+}
 
 const id = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -137,21 +144,25 @@ function decryptSecret(value) {
   }
 }
 
-function removeUploadedImage(imageUrl) {
-  if (!imageUrl?.startsWith("/uploads/")) return;
-  fs.rmSync(path.join(uploadDir, path.basename(imageUrl)), { force: true });
+function removeUploadedMedia(mediaUrl) {
+  if (!mediaUrl?.startsWith("/uploads/")) return;
+  fs.rmSync(path.join(uploadDir, path.basename(mediaUrl)), { force: true });
 }
 
-function privateMediaUrl(imageUrl, spaceId) {
-  if (!imageUrl?.startsWith("/uploads/")) return imageUrl;
-  const filename = path.basename(imageUrl);
+function privateMediaUrl(mediaUrl, spaceId) {
+  if (!mediaUrl?.startsWith("/uploads/")) return mediaUrl;
+  const filename = path.basename(mediaUrl);
   const token = jwt.sign({ scope: "media", filename, spaceId }, JWT_SECRET, { expiresIn: MEDIA_URL_TTL_SECONDS });
   return `/api/media/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}`;
 }
 
 function serializeMoment(moment) {
   if (!moment) return moment;
-  return { ...moment, image_url: privateMediaUrl(moment.image_url, moment.space_id) };
+  return {
+    ...moment,
+    image_url: privateMediaUrl(moment.image_url, moment.space_id),
+    video_url: privateMediaUrl(moment.video_url, moment.space_id),
+  };
 }
 
 function deepSeekSettings(spaceId) {
@@ -218,7 +229,14 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: { fileSize: 8 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, ["image/jpeg", "image/png", "image/webp", "image/heic"].includes(file.mimetype)),
+  fileFilter: (_req, file, cb) => {
+    if (["image/jpeg", "image/png", "image/webp", "image/heic"].includes(file.mimetype)) return cb(null, true);
+    const extension = path.extname(file.originalname).toLowerCase();
+    if (file.mimetype === "application/octet-stream" && [".jpg", ".jpeg", ".png", ".webp", ".heic"].includes(extension)) return cb(null, true);
+    const error = new Error("只支持 JPG、PNG、WebP、HEIC 和动态 JPG");
+    error.status = 400;
+    return cb(error);
+  },
 });
 
 function auth(req, res, next) {
@@ -257,14 +275,14 @@ app.get("/api/media/:filename", (req, res) => {
     const payload = jwt.verify(String(req.query.token || ""), JWT_SECRET);
     if (payload.scope !== "media" || payload.filename !== filename || !payload.spaceId) throw new Error("invalid media token");
     const storedPath = `/uploads/${filename}`;
-    const belongsToSpace = db.prepare("SELECT 1 FROM moments WHERE space_id = ? AND image_url = ?").get(payload.spaceId, storedPath);
-    if (!belongsToSpace) return res.status(404).json({ error: "没有找到这张照片" });
-    const absolutePath = path.join(uploadDir, filename);
-    if (!fs.existsSync(absolutePath)) return res.status(404).json({ error: "照片文件不存在" });
+    const belongsToSpace = db.prepare("SELECT 1 FROM moments WHERE space_id = ? AND (image_url = ? OR video_url = ?)").get(payload.spaceId, storedPath, storedPath);
+    if (!belongsToSpace) return res.status(404).json({ error: "没有找到这个媒体文件" });
+    const absolutePath = path.resolve(uploadDir, filename);
+    if (!fs.existsSync(absolutePath)) return res.status(404).json({ error: "媒体文件不存在" });
     res.set("Cache-Control", "private, max-age=300");
-    return res.sendFile(absolutePath);
+    return res.sendFile(filename, { root: uploadDir });
   } catch {
-    return res.status(401).json({ error: "照片访问链接已失效，请刷新页面" });
+    return res.status(401).json({ error: "媒体访问链接已失效，请刷新页面" });
   }
 });
 
@@ -356,20 +374,43 @@ app.get("/api/moments", auth, (req, res) => {
   res.json(rows.map(serializeMoment));
 });
 
-app.post("/api/moments", auth, upload.single("image"), (req, res, next) => {
+app.post("/api/moments", auth, upload.single("image"), async (req, res, next) => {
+  let prepared = null;
+  let saved = false;
   try {
     const input = validate(z.object({ title: z.string().trim().min(1).max(60), note: z.string().max(400).optional(), happenedAt: z.string().date() }), req.body);
-    const row = { id: id(), space_id: req.user.space_id, author_id: req.user.id, title: input.title, note: input.note || "", image_url: req.file ? `/uploads/${req.file.filename}` : "", happened_at: input.happenedAt, created_at: now() };
-    db.prepare("INSERT INTO moments (id, space_id, author_id, title, note, image_url, happened_at, created_at) VALUES (@id, @space_id, @author_id, @title, @note, @image_url, @happened_at, @created_at)").run(row);
+    prepared = req.file ? await prepareMomentMedia(req.file, { uploadDir, ffmpegPath: FFMPEG_PATH }) : null;
+    const row = {
+      id: id(),
+      space_id: req.user.space_id,
+      author_id: req.user.id,
+      title: input.title,
+      note: input.note || "",
+      image_url: prepared?.imageUrl || "",
+      video_url: prepared?.videoUrl || "",
+      happened_at: input.happenedAt,
+      created_at: now(),
+    };
+    db.prepare("INSERT INTO moments (id, space_id, author_id, title, note, image_url, video_url, happened_at, created_at) VALUES (@id, @space_id, @author_id, @title, @note, @image_url, @video_url, @happened_at, @created_at)").run(row);
+    saved = true;
     emitUpdate(req.user.space_id, "moments");
     res.status(201).json(serializeMoment(row));
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (!saved && req.file) fs.rmSync(req.file.path, { force: true });
+    if (!saved) removeUploadedMedia(prepared?.videoUrl);
+    next(error);
+  }
 });
 
-app.patch("/api/moments/:id", auth, upload.single("image"), (req, res, next) => {
+app.patch("/api/moments/:id", auth, upload.single("image"), async (req, res, next) => {
+  let replacement = null;
+  let saved = false;
   try {
     const current = db.prepare("SELECT * FROM moments WHERE id = ? AND space_id = ?").get(req.params.id, req.user.space_id);
-    if (!current) return res.status(404).json({ error: "没有找到这段时光" });
+    if (!current) {
+      if (req.file) fs.rmSync(req.file.path, { force: true });
+      return res.status(404).json({ error: "没有找到这段时光" });
+    }
     const input = validate(z.object({
       title: z.string().trim().min(1).max(60),
       note: z.string().max(400).optional(),
@@ -377,19 +418,27 @@ app.patch("/api/moments/:id", auth, upload.single("image"), (req, res, next) => 
       removeImage: z.enum(["true", "false"]).optional(),
     }), req.body);
     let imageUrl = current.image_url;
+    let videoUrl = current.video_url;
     if (req.file) {
-      removeUploadedImage(current.image_url);
-      imageUrl = `/uploads/${req.file.filename}`;
+      replacement = await prepareMomentMedia(req.file, { uploadDir, ffmpegPath: FFMPEG_PATH });
+      imageUrl = replacement.imageUrl;
+      videoUrl = replacement.videoUrl;
     } else if (input.removeImage === "true") {
-      removeUploadedImage(current.image_url);
       imageUrl = "";
+      videoUrl = "";
     }
-    db.prepare("UPDATE moments SET title = ?, note = ?, happened_at = ?, image_url = ? WHERE id = ?")
-      .run(input.title, input.note || "", input.happenedAt, imageUrl, current.id);
+    db.prepare("UPDATE moments SET title = ?, note = ?, happened_at = ?, image_url = ?, video_url = ? WHERE id = ?")
+      .run(input.title, input.note || "", input.happenedAt, imageUrl, videoUrl, current.id);
+    saved = true;
+    if (req.file || input.removeImage === "true") {
+      removeUploadedMedia(current.image_url);
+      removeUploadedMedia(current.video_url);
+    }
     emitUpdate(req.user.space_id, "moments");
-    res.json(serializeMoment({ ...current, title: input.title, note: input.note || "", happened_at: input.happenedAt, image_url: imageUrl }));
+    res.json(serializeMoment({ ...current, title: input.title, note: input.note || "", happened_at: input.happenedAt, image_url: imageUrl, video_url: videoUrl }));
   } catch (error) {
-    if (req.file) fs.rmSync(req.file.path, { force: true });
+    if (!saved && req.file) fs.rmSync(req.file.path, { force: true });
+    if (!saved) removeUploadedMedia(replacement?.videoUrl);
     next(error);
   }
 });
@@ -398,7 +447,8 @@ app.delete("/api/moments/:id", auth, (req, res) => {
   const current = db.prepare("SELECT * FROM moments WHERE id = ? AND space_id = ?").get(req.params.id, req.user.space_id);
   if (!current) return res.status(404).json({ error: "没有找到这段时光" });
   db.prepare("DELETE FROM moments WHERE id = ?").run(current.id);
-  removeUploadedImage(current.image_url);
+  removeUploadedMedia(current.image_url);
+  removeUploadedMedia(current.video_url);
   emitUpdate(req.user.space_id, "moments");
   res.json({ ok: true });
 });
@@ -619,7 +669,7 @@ app.delete("/api/account/space", auth, async (req, res, next) => {
       return res.status(403).json({ error: "密码不正确，未执行删除" });
     }
     const spaceId = req.user.space_id;
-    const images = db.prepare("SELECT image_url FROM moments WHERE space_id = ? AND image_url LIKE '/uploads/%'").all(spaceId);
+    const mediaFiles = db.prepare("SELECT image_url, video_url FROM moments WHERE space_id = ?").all(spaceId);
     db.transaction(() => {
       db.prepare("DELETE FROM space_settings WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM messages WHERE space_id = ?").run(spaceId);
@@ -629,7 +679,10 @@ app.delete("/api/account/space", auth, async (req, res, next) => {
       db.prepare("DELETE FROM users WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM spaces WHERE id = ?").run(spaceId);
     })();
-    images.forEach((item) => removeUploadedImage(item.image_url));
+    mediaFiles.forEach((item) => {
+      removeUploadedMedia(item.image_url);
+      removeUploadedMedia(item.video_url);
+    });
     res.json({ ok: true });
   } catch (error) { next(error); }
 });
@@ -647,7 +700,7 @@ io.on("connection", (socket) => socket.join(`space:${socket.user.spaceId}`));
 
 app.use((error, _req, res, _next) => {
   console.error(error);
-  if (error instanceof multer.MulterError) return res.status(400).json({ error: "图片不能超过 8MB" });
+  if (error instanceof multer.MulterError) return res.status(400).json({ error: "照片不能超过 8MB" });
   res.status(error.status || 500).json({ error: error.message || "服务暂时不可用" });
 });
 

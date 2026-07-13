@@ -12,7 +12,10 @@ if errorlevel 1 (
 )
 
 if /i "%~1"=="tunnel" goto start_tunnel
+if /i "%~1"=="local" goto start_local
+if exist "E:\Cloudflared\config\config.yml" goto start_tunnel
 
+:start_local
 echo Starting the local Couple Space backend...
 pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-couple-space.ps1" -ApiOnly
 set "exitCode=%ERRORLEVEL%"

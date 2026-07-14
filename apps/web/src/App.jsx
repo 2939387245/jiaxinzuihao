@@ -49,6 +49,7 @@ const toDateText = (value) => new Intl.DateTimeFormat("zh-CN", { year: "numeric"
 const toTime = (value) => new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 const toWeekdayText = (value) => new Intl.DateTimeFormat("zh-CN", { weekday: "long" }).format(new Date(`${value}T12:00:00`));
 const toSlashDate = (value) => value.split("-").map(Number).join("/");
+const toCommentTime = (value) => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
 
 function filterByDateRange(items, range) {
   return items.filter((item) => (!range.start || item.happened_at >= range.start) && (!range.end || item.happened_at <= range.end));
@@ -108,6 +109,7 @@ export function App() {
   });
   const [modal, setModal] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [commentVersion, setCommentVersion] = useState(0);
 
   const load = useCallback(async (silent = false) => {
     if (!authStore.get()) return;
@@ -131,7 +133,10 @@ export function App() {
   useEffect(() => {
     if (!token) return undefined;
     const socket = connectRealtime(
-      () => load(true),
+      (update) => {
+        load(true);
+        if (update?.resource === "comments") setCommentVersion((current) => current + 1);
+      },
       (message) => setData((current) => ({ ...current, messages: current.messages.some((item) => item.id === message.id) ? current.messages : [...current.messages, message] })),
     );
     return () => socket?.disconnect();
@@ -198,6 +203,7 @@ export function App() {
       {modalType === "anniversary" && <AnniversaryModal item={modalItem} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(true); }} />}
       {modalType === "todo" && <TodoModal item={modalItem} onClose={() => setModal(null)} onSaved={() => { setModal(null); load(true); }} />}
       {modalType === "lightbox" && <Lightbox item={modalItem} onClose={() => setModal(null)} />}
+      {modalType === "comments" && <CommentsModal item={modalItem} me={data.me} refreshKey={commentVersion} onClose={() => setModal(null)} onChanged={() => load(true)} />}
       {modalType === "ai-settings" && <AISettingsModal onClose={() => setModal(null)} onSaved={() => { modal?.onSaved?.(); setModal(null); }} />}
       {modalType === "change-password" && <ChangePasswordModal onClose={() => setModal(null)} onChanged={handlePasswordChanged} />}
       {modalType === "delete-space" && <DeleteSpaceModal onClose={() => setModal(null)} onDeleted={logout} />}
@@ -429,7 +435,7 @@ function TimelineView({ data, setModal, reload }) {
           <div className="timeline-date"><strong>{new Date(`${moment.happened_at}T12:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("zh-CN", { month: "short" }).format(new Date(`${moment.happened_at}T12:00:00`))}</span></div>
           <div className="timeline-line"><span /></div>
           {moment.image_url ? <button className="memory-image-button" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}<span className="image-hover-action">{moment.video_url ? <><Play weight="fill" />播放动态照片</> : <><ArrowsOutSimple />查看大图</>}</span></button> : <div className="memory-no-photo"><ImageSquare /><span>这条记录没有照片</span></div>}
-          <div className="timeline-copy"><span>{moment.author_name} 添加</span><h3>{moment.title}</h3><p>{moment.note || "这一刻，被我们一起记住了。"}</p><small>{toDateText(moment.happened_at)}</small><div className="item-actions"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button className="danger" onClick={() => remove(moment)}><Trash />删除</button></div></div>
+          <div className="timeline-copy"><span>{moment.author_name} 添加</span><h3>{moment.title}</h3><p>{moment.note || "这一刻，被我们一起记住了。"}</p><small>{toDateText(moment.happened_at)}</small><div className="item-actions"><button onClick={() => setModal({ type: "comments", item: moment })}><ChatCircleDots />评论{Number(moment.comment_count) > 0 ? ` ${moment.comment_count}` : ""}</button><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button className="danger" onClick={() => remove(moment)}><Trash />删除</button></div></div>
         </article>)}</div>
       </section>)}</div>
     </section>
@@ -459,7 +465,7 @@ function GalleryView({ data, setModal, reload }) {
         <header className="day-section-header gallery-day-header"><span className="day-section-icon"><Camera weight="fill" /></span><div><h3>{toSlashDate(group.date)}</h3><p>{toWeekdayText(group.date)} · 当天 {group.moments.length} 张照片</p></div><span className="gallery-day-count">{pad(group.moments.length)}</span></header>
         <div className="gallery-grid">{group.moments.map((moment, index) => <article className={`gallery-card card-${index % 3}`} key={moment.id}>
           <button className="gallery-zoom" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}</button>
-          <div className="gallery-overlay"><span><CalendarBlank />{moment.happened_at}</span><h3>{moment.title}</h3><p>{moment.note}</p><div className="item-actions light"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button onClick={() => remove(moment)}><Trash />删除</button></div></div>
+          <div className="gallery-overlay"><span><CalendarBlank />{moment.happened_at}</span><h3>{moment.title}</h3><p>{moment.note}</p><div className="item-actions light"><button onClick={() => setModal({ type: "comments", item: moment })}><ChatCircleDots />评论{Number(moment.comment_count) > 0 ? ` ${moment.comment_count}` : ""}</button><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button onClick={() => remove(moment)}><Trash />删除</button></div></div>
         </article>)}</div>
       </section>)}</div>
     </section>
@@ -549,6 +555,108 @@ function MomentModal({ item, onClose, onSaved }) {
   return <Modal title={editing ? "编辑这段时光" : "记录此刻"} eyebrow={editing ? "EDIT MEMORY" : "A NEW MEMORY"} onClose={onClose}><form className="modal-form" onSubmit={submit}><Field label="这一刻的名字"><input name="title" defaultValue={item?.title || ""} placeholder="比如：下班后的晚风" required /></Field><Field label="发生日期"><input name="happenedAt" type="date" defaultValue={item?.happened_at || new Date().toISOString().slice(0, 10)} required /></Field><Field label="想留下的话"><textarea name="note" defaultValue={item?.note || ""} placeholder="写一点只有你们懂的细节…" /></Field>{item?.image_url && <div className="current-photo"><img src={imageUrl(item.image_url)} alt={item.title} /><label>{item?.video_url && <b className="current-motion"><Play weight="fill" />动态照片</b>}<span><input name="removeImage" type="checkbox" />保存时移除这张照片</span></label></div>}<label className="upload-field"><Camera /><span><b>{item?.image_url ? "替换照片（可选）" : "选择一张照片（可选）"}</b><small>支持 JPG（含动态照片）、PNG、WebP，最大 8MB</small></span><input name="image" type="file" accept="image/*" /></label>{error && <div className="form-error">{error}</div>}<button className="primary-button full" disabled={busy}>{busy ? "正在保存…" : editing ? "保存修改" : "收藏进我们的时光"}</button></form></Modal>;
 }
 
+function CommentRow({ comment, me, editing, setEditing, onReply, onSave, onDelete, busy }) {
+  const mine = comment.author_id === me?.user?.id;
+  const deleted = Boolean(comment.deleted_at);
+  const edited = !deleted && comment.updated_at !== comment.created_at;
+  return <article className={`comment-row ${comment.parent_id ? "reply" : "root"} ${deleted ? "deleted" : ""}`}>
+    <span className="comment-avatar" style={{ background: comment.avatar_color || "#b86ad9" }}>{comment.author_name?.slice(0, 1) || "?"}</span>
+    <div className="comment-bubble">
+      <div className="comment-meta"><b>{comment.author_name}{mine ? <small>我</small> : null}</b><time>{toCommentTime(comment.created_at)}{edited ? " · 已编辑" : ""}</time></div>
+      {editing?.id === comment.id ? <form className="comment-edit" onSubmit={(event) => onSave(event, comment)}>
+        <textarea value={editing.body} onChange={(event) => setEditing({ id: comment.id, body: event.target.value })} maxLength={500} autoFocus />
+        <div><button type="button" onClick={() => setEditing(null)}>取消</button><button className="primary-button" disabled={busy || !editing.body.trim()}>保存</button></div>
+      </form> : <p className={deleted ? "deleted-copy" : ""}>{deleted ? "这条评论已删除" : <>{comment.reply_to_name && <span className="reply-target">回复 {comment.reply_to_name}：</span>}{comment.body}</>}</p>}
+      {!deleted && editing?.id !== comment.id && <div className="comment-actions">
+        <button type="button" onClick={() => onReply(comment)}>回复</button>
+        {mine && <button type="button" onClick={() => setEditing({ id: comment.id, body: comment.body })}>编辑</button>}
+        {mine && <button type="button" className="danger" onClick={() => onDelete(comment)}>删除</button>}
+      </div>}
+    </div>
+  </article>;
+}
+
+function CommentsModal({ item, me, refreshKey, onClose, onChanged }) {
+  const [comments, setComments] = useState([]);
+  const [body, setBody] = useState("");
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const loadComments = useCallback(async () => {
+    if (!item?.id) return;
+    try {
+      const rows = await api(`/api/moments/${item.id}/comments`);
+      setComments(rows);
+      setError("");
+    } catch (requestError) { setError(requestError.message); }
+    finally { setLoading(false); }
+  }, [item?.id]);
+  useEffect(() => { loadComments(); }, [loadComments, refreshKey]);
+  const roots = useMemo(() => comments.filter((comment) => !comment.parent_id), [comments]);
+  const replies = useMemo(() => {
+    const grouped = new Map();
+    comments.filter((comment) => comment.parent_id).forEach((comment) => {
+      const current = grouped.get(comment.parent_id) || [];
+      current.push(comment);
+      grouped.set(comment.parent_id, current);
+    });
+    return grouped;
+  }, [comments]);
+  const activeCount = comments.filter((comment) => !comment.deleted_at).length;
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!body.trim()) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/api/moments/${item.id}/comments`, { method: "POST", body: JSON.stringify({ body, parentId: replyingTo?.id || null }) });
+      setBody(""); setReplyingTo(null);
+      await loadComments(); onChanged();
+    } catch (requestError) { setError(requestError.message); }
+    finally { setBusy(false); }
+  };
+  const saveEdit = async (event, comment) => {
+    event.preventDefault();
+    if (!editing?.body.trim()) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/api/comments/${comment.id}`, { method: "PATCH", body: JSON.stringify({ body: editing.body }) });
+      setEditing(null); await loadComments(); onChanged();
+    } catch (requestError) { setError(requestError.message); }
+    finally { setBusy(false); }
+  };
+  const remove = async (comment) => {
+    if (!window.confirm("确定删除这条评论吗？已有回复会继续保留。")) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/api/comments/${comment.id}`, { method: "DELETE" });
+      if (replyingTo?.id === comment.id) setReplyingTo(null);
+      if (editing?.id === comment.id) setEditing(null);
+      await loadComments(); onChanged();
+    } catch (requestError) { setError(requestError.message); }
+    finally { setBusy(false); }
+  };
+  const rowProps = { me, editing, setEditing, onReply: (comment) => { setReplyingTo(comment); setError(""); }, onSave: saveEdit, onDelete: remove, busy };
+  return <Modal title={item?.title || "评论"} eyebrow={`${activeCount} COMMENTS`} onClose={onClose} className="comments-modal">
+    <div className="comments-summary"><ChatCircleDots weight="duotone" /><div><b>只属于你们的评论区</b><span>说说这一刻，也可以回复对方。</span></div></div>
+    <div className="comments-list">
+      {loading && <div className="comments-loading">正在加载评论…</div>}
+      {!loading && !roots.length && <div className="comments-empty"><ChatCircleDots /><b>还没有评论</b><span>留下第一句话吧。</span></div>}
+      {roots.map((root) => <section className="comment-thread" key={root.id}>
+        <CommentRow comment={root} {...rowProps} />
+        {(replies.get(root.id) || []).length > 0 && <div className="comment-replies">{(replies.get(root.id) || []).map((reply) => <CommentRow comment={reply} key={reply.id} {...rowProps} />)}</div>}
+      </section>)}
+    </div>
+    {error && <div className="form-error">{error}</div>}
+    <form className="comment-composer" onSubmit={submit}>
+      {replyingTo && <div className="replying-banner"><span>回复 {replyingTo.author_name}</span><button type="button" onClick={() => setReplyingTo(null)} aria-label="取消回复"><X /></button></div>}
+      <textarea value={body} onChange={(event) => setBody(event.target.value)} maxLength={500} placeholder={replyingTo ? `回复 ${replyingTo.author_name}…` : "写下想对 TA 说的话…"} />
+      <div className="comment-composer-foot"><small>{body.length}/500</small><button className="primary-button" disabled={busy || !body.trim()}>{busy ? "发送中…" : <><PaperPlaneTilt weight="fill" />发送</>}</button></div>
+    </form>
+  </Modal>;
+}
+
 function AnniversaryModal({ item, onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -600,7 +708,7 @@ function DeleteSpaceModal({ onClose, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const submit = async (event) => { event.preventDefault(); setBusy(true); setError(""); try { await api("/api/account/space", { method: "DELETE", body: JSON.stringify({ password, confirmation }) }); authStore.clear(); onDeleted(); } catch (requestError) { setError(requestError.message); } finally { setBusy(false); } };
-  return <Modal title="永久删除双人空间" eyebrow="DANGER ZONE" onClose={onClose}><div className="danger-notice"><Trash /><div><b>这会同时删除两个人的账号</b><p>账号、密码哈希、时光、照片、纪念日、清单、聊天记录和 DeepSeek 设置都会从本地数据库永久删除，无法恢复。</p></div></div><form onSubmit={submit}><Field label="输入你的登录密码"><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} /></Field><Field label="输入“永久删除”进行确认"><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="永久删除" required /></Field>{error && <div className="form-error">{error}</div>}<button className="danger-button full" disabled={busy || confirmation !== "永久删除"}>{busy ? "正在删除…" : "永久删除全部账号与数据"}</button></form></Modal>;
+  return <Modal title="永久删除双人空间" eyebrow="DANGER ZONE" onClose={onClose}><div className="danger-notice"><Trash /><div><b>这会同时删除两个人的账号</b><p>账号、密码哈希、时光、照片、评论与回复、纪念日、清单、聊天记录和 DeepSeek 设置都会从本地数据库永久删除，无法恢复。</p></div></div><form onSubmit={submit}><Field label="输入你的登录密码"><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} /></Field><Field label="输入“永久删除”进行确认"><input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="永久删除" required /></Field>{error && <div className="form-error">{error}</div>}<button className="danger-button full" disabled={busy || confirmation !== "永久删除"}>{busy ? "正在删除…" : "永久删除全部账号与数据"}</button></form></Modal>;
 }
 
 function Lightbox({ item, onClose }) {
@@ -612,6 +720,6 @@ function MotionBadge() { return <span className="motion-badge"><Play weight="fil
 
 function EmptyState({ icon: Icon, title, description }) { return <div className="empty-state"><Icon /><h3>{title}</h3><p>{description}</p></div>; }
 
-function Modal({ title, eyebrow, onClose, children }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className="modal-card" role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><button type="button" className="icon-button small" aria-label="关闭弹窗" onClick={onClose}><X /></button></div>{children}</div></div>; }
+function Modal({ title, eyebrow, onClose, children, className = "" }) { return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><div className={`modal-card ${className}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2></div><button type="button" className="icon-button small" aria-label="关闭弹窗" onClick={onClose}><X /></button></div>{children}</div></div>; }
 function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
 function Avatar({ member }) { return <span className="avatar" style={{ background: member?.avatarColor || "#b86ad9" }}>{member?.name?.slice(0, 1) || "?"}</span>; }

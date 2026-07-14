@@ -86,6 +86,21 @@ db.exec(`
     body TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS comments (
+    id TEXT PRIMARY KEY,
+    moment_id TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+    space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    author_id TEXT NOT NULL REFERENCES users(id),
+    parent_id TEXT REFERENCES comments(id) ON DELETE CASCADE,
+    reply_to_user_id TEXT REFERENCES users(id),
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    CHECK(parent_id IS NULL OR parent_id <> id)
+  );
+  CREATE INDEX IF NOT EXISTS comments_moment_created_idx ON comments(moment_id, created_at);
+  CREATE INDEX IF NOT EXISTS comments_parent_created_idx ON comments(parent_id, created_at);
   CREATE TABLE IF NOT EXISTS space_settings (
     space_id TEXT PRIMARY KEY REFERENCES spaces(id),
     deepseek_api_key TEXT NOT NULL DEFAULT '',
@@ -165,6 +180,18 @@ function serializeMoment(moment) {
   };
 }
 
+const COMMENT_SELECT = `
+  SELECT comments.*, users.name AS author_name, users.avatar_color,
+    reply_users.name AS reply_to_name
+  FROM comments
+  JOIN users ON users.id = comments.author_id
+  LEFT JOIN users AS reply_users ON reply_users.id = comments.reply_to_user_id
+`;
+
+function commentById(commentId, spaceId) {
+  return db.prepare(`${COMMENT_SELECT} WHERE comments.id = ? AND comments.space_id = ?`).get(commentId, spaceId);
+}
+
 function deepSeekSettings(spaceId) {
   const row = db.prepare("SELECT * FROM space_settings WHERE space_id = ?").get(spaceId);
   return {
@@ -215,6 +242,13 @@ function passwordRateLimit(req, res, next) {
   if (check.allowed) return next();
   res.set("Retry-After", String(check.retryAfter));
   return res.status(429).json({ error: "修改密码尝试过于频繁，请稍后再试" });
+}
+
+function commentRateLimit(req, res, next) {
+  const check = consumeRateLimit(`comment-user:${req.user.id}`, 30, 60 * 1000);
+  if (check.allowed) return next();
+  res.set("Retry-After", String(check.retryAfter));
+  return res.status(429).json({ error: "评论发送得太快了，请稍后再试" });
 }
 
 setInterval(() => {
@@ -370,7 +404,14 @@ app.get("/api/dashboard", auth, (req, res) => {
 });
 
 app.get("/api/moments", auth, (req, res) => {
-  const rows = db.prepare(`SELECT moments.*, users.name AS author_name FROM moments JOIN users ON users.id = moments.author_id WHERE moments.space_id = ? ORDER BY happened_at DESC, created_at DESC`).all(req.user.space_id);
+  const rows = db.prepare(`
+    SELECT moments.*, users.name AS author_name,
+      (SELECT COUNT(*) FROM comments WHERE comments.moment_id = moments.id AND comments.deleted_at IS NULL) AS comment_count
+    FROM moments
+    JOIN users ON users.id = moments.author_id
+    WHERE moments.space_id = ?
+    ORDER BY happened_at DESC, created_at DESC
+  `).all(req.user.space_id);
   res.json(rows.map(serializeMoment));
 });
 
@@ -451,6 +492,86 @@ app.delete("/api/moments/:id", auth, (req, res) => {
   removeUploadedMedia(current.video_url);
   emitUpdate(req.user.space_id, "moments");
   res.json({ ok: true });
+});
+
+app.get("/api/moments/:id/comments", auth, (req, res) => {
+  const moment = db.prepare("SELECT id FROM moments WHERE id = ? AND space_id = ?").get(req.params.id, req.user.space_id);
+  if (!moment) return res.status(404).json({ error: "没有找到这段时光" });
+  const rows = db.prepare(`${COMMENT_SELECT}
+    WHERE comments.moment_id = ? AND comments.space_id = ?
+    ORDER BY comments.created_at ASC
+  `).all(moment.id, req.user.space_id);
+  return res.json(rows);
+});
+
+app.post("/api/moments/:id/comments", auth, commentRateLimit, (req, res, next) => {
+  try {
+    const moment = db.prepare("SELECT id FROM moments WHERE id = ? AND space_id = ?").get(req.params.id, req.user.space_id);
+    if (!moment) return res.status(404).json({ error: "没有找到这段时光" });
+    const input = validate(z.object({
+      body: z.string().trim().min(1, "评论不能为空").max(500, "评论不能超过 500 字"),
+      parentId: z.string().uuid("回复目标不正确").nullable().optional(),
+    }), req.body);
+    let parentId = null;
+    let replyToUserId = null;
+    if (input.parentId) {
+      const parent = db.prepare(`
+        SELECT id, parent_id, author_id FROM comments
+        WHERE id = ? AND moment_id = ? AND space_id = ? AND deleted_at IS NULL
+      `).get(input.parentId, moment.id, req.user.space_id);
+      if (!parent) return res.status(404).json({ error: "要回复的评论不存在或已经删除" });
+      parentId = parent.parent_id || parent.id;
+      replyToUserId = parent.author_id;
+    }
+    const timestamp = now();
+    const row = {
+      id: id(), moment_id: moment.id, space_id: req.user.space_id, author_id: req.user.id,
+      parent_id: parentId, reply_to_user_id: replyToUserId, body: input.body,
+      created_at: timestamp, updated_at: timestamp,
+    };
+    db.prepare(`
+      INSERT INTO comments (id, moment_id, space_id, author_id, parent_id, reply_to_user_id, body, created_at, updated_at)
+      VALUES (@id, @moment_id, @space_id, @author_id, @parent_id, @reply_to_user_id, @body, @created_at, @updated_at)
+    `).run(row);
+    emitUpdate(req.user.space_id, "comments");
+    return res.status(201).json(commentById(row.id, req.user.space_id));
+  } catch (error) { return next(error); }
+});
+
+app.patch("/api/comments/:id", auth, commentRateLimit, (req, res, next) => {
+  try {
+    const current = commentById(req.params.id, req.user.space_id);
+    if (!current) return res.status(404).json({ error: "没有找到这条评论" });
+    if (current.author_id !== req.user.id) return res.status(403).json({ error: "只能编辑自己发表的评论" });
+    if (current.deleted_at) return res.status(410).json({ error: "这条评论已经删除" });
+    const input = validate(z.object({ body: z.string().trim().min(1, "评论不能为空").max(500, "评论不能超过 500 字") }), req.body);
+    db.prepare("UPDATE comments SET body = ?, updated_at = ? WHERE id = ?").run(input.body, now(), current.id);
+    emitUpdate(req.user.space_id, "comments");
+    return res.json(commentById(current.id, req.user.space_id));
+  } catch (error) { return next(error); }
+});
+
+app.delete("/api/comments/:id", auth, (req, res) => {
+  const current = commentById(req.params.id, req.user.space_id);
+  if (!current) return res.status(404).json({ error: "没有找到这条评论" });
+  if (current.author_id !== req.user.id) return res.status(403).json({ error: "只能删除自己发表的评论" });
+  db.transaction(() => {
+    const childCount = db.prepare("SELECT COUNT(*) AS count FROM comments WHERE parent_id = ?").get(current.id).count;
+    if (!current.parent_id && childCount > 0) {
+      const timestamp = now();
+      db.prepare("UPDATE comments SET body = '', deleted_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, current.id);
+    } else {
+      db.prepare("DELETE FROM comments WHERE id = ?").run(current.id);
+      if (current.parent_id) {
+        db.prepare(`DELETE FROM comments
+          WHERE id = ? AND deleted_at IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM comments AS replies WHERE replies.parent_id = comments.id)
+        `).run(current.parent_id);
+      }
+    }
+  })();
+  emitUpdate(req.user.space_id, "comments");
+  return res.json({ ok: true });
 });
 
 app.get("/api/anniversaries", auth, (req, res) => {
@@ -675,6 +796,7 @@ app.delete("/api/account/space", auth, async (req, res, next) => {
       db.prepare("DELETE FROM messages WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM todos WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM anniversaries WHERE space_id = ?").run(spaceId);
+      db.prepare("DELETE FROM comments WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM moments WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM users WHERE space_id = ?").run(spaceId);
       db.prepare("DELETE FROM spaces WHERE id = ?").run(spaceId);

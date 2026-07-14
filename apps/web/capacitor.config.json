@@ -3,7 +3,8 @@
   "appName": "Lumi",
   "webDir": "dist",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "iosScheme": "capacitor"
   },
   "android": {
     "backgroundColor": "#fbf7fb",

@@ -47,6 +47,22 @@ const emptyData = { me: null, dashboard: null, moments: [], anniversaries: [], t
 const pad = (value) => String(value).padStart(2, "0");
 const toDateText = (value) => new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(new Date(`${value}T12:00:00`));
 const toTime = (value) => new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(value));
+const toWeekdayText = (value) => new Intl.DateTimeFormat("zh-CN", { weekday: "long" }).format(new Date(`${value}T12:00:00`));
+const toSlashDate = (value) => value.split("-").map(Number).join("/");
+
+function filterByDateRange(items, range) {
+  return items.filter((item) => (!range.start || item.happened_at >= range.start) && (!range.end || item.happened_at <= range.end));
+}
+
+function groupByMomentDate(items) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const current = groups.get(item.happened_at) || [];
+    current.push(item);
+    groups.set(item.happened_at, current);
+  });
+  return [...groups.entries()].map(([date, moments]) => ({ date, moments }));
+}
 
 function elapsedParts(from) {
   const start = new Date(`${from}T00:00:00`).getTime();
@@ -371,7 +387,31 @@ function PageHeading({ eyebrow, title, description, action }) {
   return <div className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div>{action}</div>;
 }
 
+function DateRangeFilter({ range, setRange, total, visible }) {
+  const update = (field, value) => setRange((current) => {
+    const next = { ...current, [field]: value };
+    if (next.start && next.end && next.start > next.end) {
+      if (field === "start") next.end = value;
+      else next.start = value;
+    }
+    return next;
+  });
+  const active = Boolean(range.start || range.end);
+  return <div className="date-range-filter">
+    <div className="date-range-summary"><span className="date-range-icon"><CalendarBlank weight="duotone" /></span><span><b>按日期查看</b><small>{active ? `筛选出 ${visible} / ${total} 条记录` : `共 ${total} 条记录`}</small></span></div>
+    <div className="date-range-fields">
+      <label><span>开始日期</span><input type="date" value={range.start} max={range.end || undefined} onChange={(event) => update("start", event.target.value)} aria-label="开始日期" /></label>
+      <ArrowRight className="date-range-arrow" />
+      <label><span>结束日期</span><input type="date" value={range.end} min={range.start || undefined} onChange={(event) => update("end", event.target.value)} aria-label="结束日期" /></label>
+      {active && <button type="button" className="date-range-clear" onClick={() => setRange({ start: "", end: "" })}><X />清空</button>}
+    </div>
+  </div>;
+}
+
 function TimelineView({ data, setModal, reload }) {
+  const [dateRange, setDateRange] = useState({ start: "", end: "" });
+  const visibleMoments = filterByDateRange(data.moments, dateRange);
+  const dayGroups = groupByMomentDate(visibleMoments);
   const remove = async (moment) => {
     if (!window.confirm(`确定删除“${moment.title}”吗？相关照片也会一起删除。`)) return;
     await api(`/api/moments/${moment.id}`, { method: "DELETE" });
@@ -380,22 +420,30 @@ function TimelineView({ data, setModal, reload }) {
   return (
     <section className="page">
       <PageHeading eyebrow="OUR TIMELINE" title="我们的时光" description="不用轰轰烈烈，普通日子也值得被好好保存。" action={<button className="primary-button" onClick={() => setModal("moment")}><Plus />记录此刻</button>} />
+      <DateRangeFilter range={dateRange} setRange={setDateRange} total={data.moments.length} visible={visibleMoments.length} />
       {!data.moments.length && <EmptyState icon={ClockCounterClockwise} title="还没有时光记录" description="写下第一件只属于你们的小事吧。" />}
-      <div className="timeline-list">{data.moments.map((moment) => <article className="timeline-item" key={moment.id}>
-        <div className="timeline-date"><strong>{new Date(`${moment.happened_at}T12:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("zh-CN", { month: "short" }).format(new Date(`${moment.happened_at}T12:00:00`))}</span></div>
-        <div className="timeline-line"><span /></div>
-        {moment.image_url ? <button className="memory-image-button" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}<span className="image-hover-action">{moment.video_url ? <><Play weight="fill" />播放动态照片</> : <><ArrowsOutSimple />查看大图</>}</span></button> : <div className="memory-no-photo"><ImageSquare /><span>这条记录没有照片</span></div>}
-        <div className="timeline-copy"><span>{moment.author_name} 添加</span><h3>{moment.title}</h3><p>{moment.note || "这一刻，被我们一起记住了。"}</p><small>{toDateText(moment.happened_at)}</small><div className="item-actions"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button className="danger" onClick={() => remove(moment)}><Trash />删除</button></div></div>
-      </article>)}</div>
+      {data.moments.length > 0 && !visibleMoments.length && <EmptyState icon={CalendarBlank} title="这个日期范围还没有时光" description="换一段日期看看，或者清空筛选查看全部记录。" />}
+      <div className="timeline-days">{dayGroups.map((group, dayIndex) => <section className={`timeline-day day-tone-${dayIndex % 3}`} key={group.date}>
+        <header className="day-section-header"><span className="day-section-icon"><CalendarBlank weight="fill" /></span><div><h3>{toSlashDate(group.date)}</h3><p>{toWeekdayText(group.date)} · {group.moments.length} 个瞬间</p></div></header>
+        <div className="timeline-list">{group.moments.map((moment) => <article className="timeline-item" key={moment.id}>
+          <div className="timeline-date"><strong>{new Date(`${moment.happened_at}T12:00:00`).getDate()}</strong><span>{new Intl.DateTimeFormat("zh-CN", { month: "short" }).format(new Date(`${moment.happened_at}T12:00:00`))}</span></div>
+          <div className="timeline-line"><span /></div>
+          {moment.image_url ? <button className="memory-image-button" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}<span className="image-hover-action">{moment.video_url ? <><Play weight="fill" />播放动态照片</> : <><ArrowsOutSimple />查看大图</>}</span></button> : <div className="memory-no-photo"><ImageSquare /><span>这条记录没有照片</span></div>}
+          <div className="timeline-copy"><span>{moment.author_name} 添加</span><h3>{moment.title}</h3><p>{moment.note || "这一刻，被我们一起记住了。"}</p><small>{toDateText(moment.happened_at)}</small><div className="item-actions"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button className="danger" onClick={() => remove(moment)}><Trash />删除</button></div></div>
+        </article>)}</div>
+      </section>)}</div>
     </section>
   );
 }
 
 function GalleryView({ data, setModal, reload }) {
   const [filter, setFilter] = useState("全部");
+  const [dateRange, setDateRange] = useState({ start: "", end: "" });
   const photos = data.moments.filter((moment) => moment.image_url);
   const thisYearPhotos = photos.filter((moment) => new Date(`${moment.happened_at}T12:00:00`).getFullYear() === new Date().getFullYear());
-  const visiblePhotos = filter === "今年" ? thisYearPhotos : photos;
+  const periodPhotos = filter === "今年" ? thisYearPhotos : photos;
+  const visiblePhotos = filterByDateRange(periodPhotos, dateRange);
+  const dayGroups = groupByMomentDate(visiblePhotos);
   const remove = async (moment) => {
     if (!window.confirm(`确定删除“${moment.title}”和这张照片吗？`)) return;
     await api(`/api/moments/${moment.id}`, { method: "DELETE" });
@@ -405,11 +453,15 @@ function GalleryView({ data, setModal, reload }) {
     <section className="page">
       <PageHeading eyebrow="OUR GALLERY" title="双人相册" description="所有一起看过的风景，都留在这里。" action={<button className="primary-button" onClick={() => setModal("moment")}><UploadSimple />上传照片</button>} />
       <div className="filter-tabs">{["全部", "今年"].map((item) => <button key={item} className={filter === item ? "active" : ""} onClick={() => setFilter(item)}>{item} <small>{item === "全部" ? photos.length : thisYearPhotos.length}</small></button>)}</div>
-      {!visiblePhotos.length && <EmptyState icon={ImageSquare} title="这里还没有照片" description="不上传照片的时光只会留在时光页，不会用示例图填充相册。" />}
-      <div className="gallery-grid">{visiblePhotos.map((moment, index) => <article className={`gallery-card card-${index % 3}`} key={moment.id}>
-        <button className="gallery-zoom" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}</button>
-        <div className="gallery-overlay"><span><CalendarBlank />{moment.happened_at}</span><h3>{moment.title}</h3><p>{moment.note}</p><div className="item-actions light"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button onClick={() => remove(moment)}><Trash />删除</button></div></div>
-      </article>)}</div>
+      <DateRangeFilter range={dateRange} setRange={setDateRange} total={periodPhotos.length} visible={visiblePhotos.length} />
+      {!visiblePhotos.length && <EmptyState icon={ImageSquare} title={photos.length ? "这个日期范围没有照片" : "这里还没有照片"} description={photos.length ? "换一段日期看看，或者清空筛选查看全部照片。" : "不上传照片的时光只会留在时光页，不会用示例图填充相册。"} />}
+      <div className="gallery-days">{dayGroups.map((group, dayIndex) => <section className={`gallery-day day-tone-${dayIndex % 3}`} key={group.date}>
+        <header className="day-section-header gallery-day-header"><span className="day-section-icon"><Camera weight="fill" /></span><div><h3>{toSlashDate(group.date)}</h3><p>{toWeekdayText(group.date)} · 当天 {group.moments.length} 张照片</p></div><span className="gallery-day-count">{pad(group.moments.length)}</span></header>
+        <div className="gallery-grid">{group.moments.map((moment, index) => <article className={`gallery-card card-${index % 3}`} key={moment.id}>
+          <button className="gallery-zoom" onClick={() => setModal({ type: "lightbox", item: moment })} aria-label={moment.video_url ? `播放动态照片 ${moment.title}` : `放大查看 ${moment.title}`}><img src={imageUrl(moment.image_url)} alt={moment.title} />{moment.video_url && <MotionBadge />}</button>
+          <div className="gallery-overlay"><span><CalendarBlank />{moment.happened_at}</span><h3>{moment.title}</h3><p>{moment.note}</p><div className="item-actions light"><button onClick={() => setModal({ type: "moment", item: moment })}><PencilSimple />编辑</button><button onClick={() => remove(moment)}><Trash />删除</button></div></div>
+        </article>)}</div>
+      </section>)}</div>
     </section>
   );
 }
